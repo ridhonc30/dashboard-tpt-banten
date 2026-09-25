@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 st.set_page_config(
@@ -133,12 +134,11 @@ st.markdown(
             padding-top: 1.7rem;
             padding-bottom: 2rem;
         }
-
-        /* ===== Sembunyikan menu bawaan Streamlit ===== */
     </style>
     """,
     unsafe_allow_html=True,
 )
+
 
 @st.cache_data
 def load_data() -> pd.DataFrame:
@@ -153,11 +153,22 @@ def load_data() -> pd.DataFrame:
     data["Tahun"] = data["Tahun"].astype(int)
     return data.sort_values(["Tahun", "Kabupaten/Kota"]).reset_index(drop=True)
 
+
 def format_percent(value: float) -> str:
     return f"{value:.2f}%".replace(".", ",")
 
+
+def format_pp(value: float) -> str:
+    sign = "+" if value > 0 else ""
+    return f"{sign}{value:.2f} pp".replace(".", ",")
+
+
 def render_footer() -> None:
-    st.markdown('<div class="footer">Dashboard TPT Provinsi Banten · Data BPS · Periode 2017–2024</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="footer">Dashboard TPT Provinsi Banten · Data BPS · Periode 2017–2024</div>',
+        unsafe_allow_html=True,
+    )
+
 
 try:
     df = load_data()
@@ -165,8 +176,12 @@ except Exception as error:
     st.error(f"Gagal memuat dataset: {error}")
     st.stop()
 
+# PENTING: baris "Provinsi Banten" adalah angka resmi TPT tingkat provinsi
+# dari BPS (agregat), BUKAN rata-rata sederhana dari 8 kabupaten/kota.
+# Kedua nilai ini berbeda karena bobot jumlah angkatan kerja tiap wilayah
+# tidak sama, sehingga keduanya ditampilkan secara terpisah di dashboard.
 regional_df = df[df["Kabupaten/Kota"] != "Provinsi Banten"].copy()
-province_df = df[df["Kabupaten/Kota"] == "Provinsi Banten"].copy()
+province_df = df[df["Kabupaten/Kota"] == "Provinsi Banten"].copy().sort_values("Tahun")
 
 with st.sidebar:
     st.markdown("## 📊 TPT Banten")
@@ -180,7 +195,7 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("**Sumber data**  \nBPS Provinsi Banten")
     st.markdown("**Periode**  \n2017–2024")
-    st.markdown("**Cakupan**  \n8 kabupaten/kota")
+    st.markdown("**Cakupan**  \n8 kabupaten/kota + agregat provinsi")
 
 if page == "🏠 Beranda":
     st.markdown(
@@ -212,19 +227,23 @@ if page == "🏠 Beranda":
     with left:
         st.markdown("#### Informasi yang tersedia")
         st.markdown("""
-        - Tren TPT Provinsi Banten tahun 2017–2024.
-        - Perbandingan TPT antar kabupaten/kota.
-        - Ringkasan nilai rata-rata, tertinggi, dan terendah.
-        - Proporsi TPT berdasarkan kabupaten/kota.
+        - Tren TPT resmi Provinsi Banten (angka agregat BPS) tahun 2017–2024.
+        - Perbandingan TPT antar kabupaten/kota, termasuk perubahan tahunan (poin persentase & persen).
+        - Ringkasan nilai rata-rata, tertinggi, dan terendah antarwilayah.
+        - Peta sebaran (heatmap) TPT per kabupaten/kota tiap tahun.
         - Data aktual yang dapat disaring dan diunduh.
         """)
     with right:
-        latest_year = int(regional_df["Tahun"].max())
-        latest_data = regional_df[regional_df["Tahun"] == latest_year]
-        st.markdown("#### Ringkasan data terbaru")
+        latest_year = int(province_df["Tahun"].max())
+        latest_prov = province_df[province_df["Tahun"] == latest_year]["TPT"].iloc[0]
+        st.markdown("#### TPT Provinsi Banten terbaru")
         m1, m2 = st.columns(2)
         m1.metric("Tahun terbaru", latest_year)
-        m2.metric("Rata-rata TPT", format_percent(latest_data["TPT"].mean()))
+        m2.metric("TPT Provinsi Banten (BPS)", format_percent(latest_prov))
+        st.caption(
+            "Angka di atas adalah TPT resmi tingkat provinsi dari BPS, bukan "
+            "rata-rata sederhana 8 kabupaten/kota."
+        )
     st.markdown('<div class="note-box">Penelitian difokuskan pada visualisasi dan analisis tren. Website ini tidak melakukan prediksi atau peramalan TPT pada tahun berikutnya.</div>', unsafe_allow_html=True)
     render_footer()
 
@@ -249,50 +268,121 @@ elif page == "📈 Dashboard TPT":
         regional_df["Tahun"].isin(selected_years)
         & regional_df["Kabupaten/Kota"].isin(selected_regions)
     ].copy()
+    filtered_prov = province_df[province_df["Tahun"].isin(selected_years)].copy()
 
     highest_row = filtered.loc[filtered["TPT"].idxmax()]
     lowest_row = filtered.loc[filtered["TPT"].idxmin()]
 
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-    kpi1.metric("Rata-rata TPT", format_percent(filtered["TPT"].mean()))
-    kpi2.metric("TPT tertinggi", format_percent(highest_row["TPT"]), f'{highest_row["Kabupaten/Kota"]} · {int(highest_row["Tahun"])}', delta_color="off")
-    kpi3.metric("TPT terendah", format_percent(lowest_row["TPT"]), f'{lowest_row["Kabupaten/Kota"]} · {int(lowest_row["Tahun"])}', delta_color="off")
-    kpi4.metric("Jumlah wilayah", filtered["Kabupaten/Kota"].nunique())
-
-    st.markdown("### Visualisasi Data TPT")
-    line_data = filtered.groupby("Tahun", as_index=False)["TPT"].mean().sort_values("Tahun")
-    bar_data = filtered.groupby("Kabupaten/Kota", as_index=False)["TPT"].mean().sort_values("TPT", ascending=False)
-    pie_data = bar_data.copy()
-
-    chart_left, chart_right = st.columns([1.1, 1])
-    with chart_left:
-        line_fig = px.line(line_data, x="Tahun", y="TPT", markers=True, title="Tren Rata-rata TPT", labels={"Tahun": "Tahun", "TPT": "TPT (%)"})
-        line_fig.update_traces(line_width=3)
-        line_fig.update_layout(height=420, margin=dict(l=20, r=20, t=60, b=20), xaxis=dict(tickmode="array", tickvals=line_data["Tahun"].tolist()))
-        st.plotly_chart(line_fig, use_container_width=True)
-    with chart_right:
-        pie_fig = px.pie(pie_data, names="Kabupaten/Kota", values="TPT", title="Proporsi Rata-rata TPT Kabupaten/Kota", hole=0.35)
-        pie_fig.update_layout(height=420, margin=dict(l=20, r=20, t=60, b=20))
-        st.plotly_chart(pie_fig, use_container_width=True)
-
-    bar_fig = px.bar(
-        bar_data,
-        x="Kabupaten/Kota",
-        y="TPT",
-        title="Perbandingan Rata-rata TPT Kabupaten/Kota",
-        labels={"Kabupaten/Kota": "Kabupaten/Kota", "TPT": "TPT (%)"},
-        text=bar_data["TPT"].map(lambda value: f"{value:.2f}%"),
+    kpi1.metric(
+        "TPT Provinsi Banten (BPS, tahun terpilih)",
+        format_percent(filtered_prov["TPT"].mean()) if not filtered_prov.empty else "-",
     )
-    bar_fig.update_traces(textposition="outside")
-    bar_fig.update_layout(height=460, margin=dict(l=20, r=20, t=60, b=100), xaxis_tickangle=-35)
-    st.plotly_chart(bar_fig, use_container_width=True)
+    kpi2.metric("TPT tertinggi (kab/kota)", format_percent(highest_row["TPT"]), f'{highest_row["Kabupaten/Kota"]} · {int(highest_row["Tahun"])}', delta_color="off")
+    kpi3.metric("TPT terendah (kab/kota)", format_percent(lowest_row["TPT"]), f'{lowest_row["Kabupaten/Kota"]} · {int(lowest_row["Tahun"])}', delta_color="off")
+    kpi4.metric("Jumlah wilayah", filtered["Kabupaten/Kota"].nunique())
+    st.caption(
+        "KPI 'TPT Provinsi Banten' menggunakan angka agregat resmi BPS, bukan rata-rata "
+        "dari 8 kabupaten/kota yang ditampilkan pada grafik perbandingan."
+    )
+
+    st.markdown("### Tren TPT Provinsi Banten (Data Resmi BPS)")
+    prov_trend = filtered_prov.sort_values("Tahun").copy()
+    prov_trend["Perubahan (pp)"] = prov_trend["TPT"].diff()
+    prov_trend["Perubahan (%)"] = prov_trend["TPT"].pct_change() * 100
+
+    line_fig = px.line(
+        prov_trend, x="Tahun", y="TPT", markers=True,
+        title="Tren TPT Provinsi Banten (Agregat BPS)",
+        labels={"Tahun": "Tahun", "TPT": "TPT (%)"},
+    )
+    line_fig.update_traces(line_width=3)
+    line_fig.update_layout(height=380, margin=dict(l=20, r=20, t=60, b=20), xaxis=dict(tickmode="array", tickvals=prov_trend["Tahun"].tolist()))
+    st.plotly_chart(line_fig, use_container_width=True)
+
+    if len(prov_trend) >= 2:
+        awal = prov_trend.iloc[0]
+        akhir = prov_trend.iloc[-1]
+        total_pp = akhir["TPT"] - awal["TPT"]
+        total_pct = (akhir["TPT"] - awal["TPT"]) / awal["TPT"] * 100
+        naik_row = prov_trend.loc[prov_trend["Perubahan (pp)"].idxmax()] if prov_trend["Perubahan (pp)"].notna().any() else None
+        turun_row = prov_trend.loc[prov_trend["Perubahan (pp)"].idxmin()] if prov_trend["Perubahan (pp)"].notna().any() else None
+        ringkas = (
+            f"Dari tahun {int(awal['Tahun'])} ({format_percent(awal['TPT'])}) ke tahun "
+            f"{int(akhir['Tahun'])} ({format_percent(akhir['TPT'])}), TPT Provinsi Banten "
+            f"berubah sebesar {format_pp(total_pp)} atau {total_pct:+.2f}%. "
+        )
+        if naik_row is not None:
+            ringkas += (
+                f"Kenaikan tahunan terbesar terjadi pada {int(naik_row['Tahun'])} "
+                f"sebesar {format_pp(naik_row['Perubahan (pp)'])}. "
+            )
+        if turun_row is not None:
+            ringkas += (
+                f"Penurunan tahunan terbesar terjadi pada {int(turun_row['Tahun'])} "
+                f"sebesar {format_pp(turun_row['Perubahan (pp)'])}."
+            )
+        st.info(ringkas)
+
+    show_trend_table = st.checkbox("Tampilkan tabel perubahan tahunan TPT Provinsi Banten", value=True)
+    if show_trend_table:
+        trend_display = prov_trend[["Tahun", "TPT", "Perubahan (pp)", "Perubahan (%)"]].copy()
+        trend_display["TPT"] = trend_display["TPT"].map(format_percent)
+        trend_display["Perubahan (pp)"] = trend_display["Perubahan (pp)"].map(
+            lambda v: format_pp(v) if pd.notna(v) else "-"
+        )
+        trend_display["Perubahan (%)"] = trend_display["Perubahan (%)"].map(
+            lambda v: f"{v:+.2f}%" if pd.notna(v) else "-"
+        )
+        st.dataframe(trend_display, use_container_width=True, hide_index=True)
+
+    st.markdown("### Perbandingan Antar Kabupaten/Kota")
+    bar_data = filtered.groupby("Kabupaten/Kota", as_index=False)["TPT"].mean().sort_values("TPT", ascending=False)
+
+    chart_left, chart_right = st.columns([1, 1.1])
+    with chart_left:
+        bar_fig = px.bar(
+            bar_data,
+            x="TPT",
+            y="Kabupaten/Kota",
+            orientation="h",
+            title="Ranking Rata-rata TPT Kabupaten/Kota",
+            labels={"Kabupaten/Kota": "Kabupaten/Kota", "TPT": "TPT (%)"},
+            text=bar_data["TPT"].map(lambda value: f"{value:.2f}%"),
+        )
+        bar_fig.update_traces(textposition="outside")
+        bar_fig.update_layout(
+            height=420, margin=dict(l=20, r=20, t=60, b=20),
+            yaxis=dict(categoryorder="total ascending"),
+        )
+        st.plotly_chart(bar_fig, use_container_width=True)
+    with chart_right:
+        heatmap_data = filtered.pivot_table(index="Kabupaten/Kota", columns="Tahun", values="TPT")
+        heatmap_fig = go.Figure(
+            data=go.Heatmap(
+                z=heatmap_data.values,
+                x=[str(c) for c in heatmap_data.columns],
+                y=heatmap_data.index,
+                colorscale="YlOrRd",
+                text=heatmap_data.round(2).values,
+                texttemplate="%{text}",
+                colorbar=dict(title="TPT (%)"),
+            )
+        )
+        heatmap_fig.update_layout(
+            title="Heatmap TPT per Kabupaten/Kota per Tahun",
+            height=420, margin=dict(l=20, r=20, t=60, b=20),
+        )
+        st.plotly_chart(heatmap_fig, use_container_width=True)
 
     st.markdown(
         """
         <div class="note-box">
-            Seluruh visual pada halaman ini mengikuti filter tahun dan kabupaten/kota.
-            Jika hanya satu tahun dipilih, line chart akan menampilkan titik data pada tahun tersebut.
-            Jika beberapa tahun dipilih, line chart akan menampilkan tren berdasarkan rentang tahun yang dipilih.
+            Seluruh visual pada halaman ini mengikuti filter tahun dan kabupaten/kota, kecuali
+            grafik "Tren TPT Provinsi Banten" yang selalu memakai angka resmi agregat BPS untuk
+            tahun-tahun yang dipilih (tidak mengikuti filter kabupaten/kota, karena angka provinsi
+            tidak dipecah per wilayah). Ranking dan heatmap menampilkan rata-rata TPT kabupaten/kota
+            sesuai kabupaten/kota dan tahun yang dipilih.
         </div>
         """,
         unsafe_allow_html=True,
@@ -319,7 +409,15 @@ elif page == "🗂️ Tentang Data":
     col4.metric("Kolom dataset", len(df.columns))
 
     st.markdown("### Sumber dan cakupan")
-    st.write("Data yang digunakan berasal dari Badan Pusat Statistik Provinsi Banten. Dataset mencakup TPT tahun 2017–2024 pada delapan kabupaten/kota di Provinsi Banten. Baris **Provinsi Banten** dipertahankan sebagai data agregat provinsi dan tidak dihitung sebagai kabupaten/kota.")
+    st.write("Data yang digunakan berasal dari Badan Pusat Statistik Provinsi Banten. Dataset mencakup TPT tahun 2017–2024 pada delapan kabupaten/kota di Provinsi Banten.")
+    st.markdown(
+        '<div class="note-box"><b>Catatan definisi:</b> baris <b>Provinsi Banten</b> adalah angka '
+        'TPT tingkat provinsi yang dipublikasikan langsung oleh BPS (agregat), bukan hasil '
+        'perhitungan rata-rata sederhana dari 8 kabupaten/kota pada dataset ini. Kedua angka '
+        'tersebut dapat berbeda karena penghitungan TPT provinsi memperhitungkan bobot jumlah '
+        'angkatan kerja tiap wilayah.</div>',
+        unsafe_allow_html=True,
+    )
 
     st.markdown("### Struktur dataset")
     structure_df = pd.DataFrame({
